@@ -302,12 +302,12 @@ func (m *MinioConfigModule) Start() error { return nil }
 func (m *MinioConfigModule) Stop() error { return nil }
 
 // Cleanup closes the DragonflyDB/Redis client connection.
-func (m *MinioConfigModule) Cleanup() error {
-	if m.DragonflyClient != nil {
-		return m.DragonflyClient.Close()
-	}
-	return nil
-}
+// func (m *MinioConfigModule) Cleanup() error {
+// 	if m.DragonflyClient != nil {
+// 		return m.DragonflyClient.Close()
+// 	}
+// 	return nil
+// }
 
 func (m *MinioConfigModule) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	for d.Next() {
@@ -368,5 +368,5 @@ var (
 	_ caddy.App                   = (*MinioConfigModule)(nil)
 	_ caddyhttp.MiddlewareHandler = (*MinioStaticHTML)(nil)
 	_ caddyfile.Unmarshaler       = (*MinioConfigModule)(nil)
-	_ caddy.CleanerUpper          = (*MinioConfigModule)(nil)
+	// _ caddy.CleanerUpper          = (*MinioConfigModule)(nil)
 )
