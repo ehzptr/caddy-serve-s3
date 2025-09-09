@@ -299,7 +299,13 @@ func (m *MinioConfigModule) Provision(ctx caddy.Context) error {
 func (m *MinioConfigModule) Start() error { return nil }
 
 // Stop satisfies the caddy.App interface. It currently does nothing.
-func (m *MinioConfigModule) Stop() error { return nil }
+func (m *MinioConfigModule) Stop() error {
+	if m.DragonflyClient != nil {
+		return m.DragonflyClient.Close()
+	}
+
+	return nil
+}
 
 // Cleanup closes the DragonflyDB/Redis client connection.
 // func (m *MinioConfigModule) Cleanup() error {
