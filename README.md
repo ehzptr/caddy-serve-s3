@@ -1,92 +1,173 @@
-# 🪣 MinIO Static HTML Handler for Caddy v2
+# MinIO Static HTML Handler for Caddy
 
-**caddy-serve-s3** is a custom Caddy v2 HTTP module that serves static HTML files directly from a **MinIO** (or any S3-compatible) object storage bucket. It optionally supports **caching** via **DragonflyDB** or **Redis** for improved performance.
+`caddy-serve-s3` is a [Caddy v2](https://caddyserver.com/) module that serves static HTML files directly from a [MinIO](https://min.io/) bucket.
 
-> This module is ideal for serving static frontends, single-page applications (SPAs), or HTML-based content directly from object storage with optional caching for low-latency delivery.
+It includes optional caching with [DragonflyDB](https://www.dragonflydb.io/) or [Redis](https://redis.io/), supporting TTLs and maximum object sizes, so you can reduce repeated S3 requests and improve response latency.
 
-## 🚀 Features
+---
 
-* 🔒 Secure integration with **MinIO** or any S3-compatible storage.
-* ⚡ Optional caching using **DragonflyDB** or **Redis**.
-* 🔥 Cache TTL control per route or globally.
-* 📂 Configurable fallback for `404 Not Found`.
-* 🧩 Pluggable into Caddy’s modular architecture via JSON or Caddyfile.
+## ✨ Features
+
+- 🔗 Serve static HTML directly from MinIO buckets
+- ⚡ Optional caching in Redis/DragonflyDB
+- ⏳ Per-route or global cache TTLs (`cache_ttl`, `default_cache_ttl`)
+- 📦 Configurable maximum cache size (`max_cache_size`)
+- 🗂 Custom fallback file for `404 Not Found` cases
+- 🛠 Easy configuration via Caddyfile or JSON
 
 ---
 
 ## 📦 Installation
 
-> **Note:** This is a Caddy **custom module**. You'll need to [build Caddy from source](https://caddyserver.com/docs/build#xcaddy) with this module:
+You need a custom build of Caddy with this module:
 
 ```bash
-xcaddy build --with github.com/ehzptr/caddy-serve-s3
+xcaddy build \
+  --with github.com/ehzptr/caddy-serve-s3
+````
+
+Replace `github.com/ehzptr/caddy-serve-s3` with your repo location.
+
+---
+
+## 🚀 Quick Start with Docker
+
+Here’s a minimal setup using Docker Compose: MinIO + Redis + Caddy with this handler.
+
+```yaml
+services:
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - ./data:/data
+
+  redis:
+    image: redis:7
+    container_name: redis
+    ports:
+      - "6379:6379"
+
+  caddy:
+    image: caddy:2
+    container_name: caddy
+    build:
+      context: .
+      dockerfile: Dockerfile.caddy
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./errors:/srv/errors
 ```
+
+### Example `Caddyfile`
+
+```caddyfile
+{
+  apps {
+    minio.config myminio {
+      endpoint        "minio:9000"
+      access_key      "minioadmin"
+      secret_key      "minioadmin"
+      secure          false
+      reddis_address  "redis://redis:6379/0"
+      not_found_file  "/srv/errors/404.html"
+      default_cache_ttl "5m"
+      max_cache_size  "10MB"
+    }
+  }
+}
+
+:8080 {
+  route {
+    minio_static_html {
+      bucket    "mybucket"
+      html_file "index"    # will resolve to index.html
+      cache_ttl "2m"
+    }
+  }
+}
+```
+
+Put a `404.html` file inside `./errors` to customize error pages.
 
 ---
 
 ## ⚙️ Configuration
 
-### JSON Configuration
+### Global `minio.config`
+
+Global configuration tells the module how to connect to MinIO and Redis/DragonflyDB.
+
+| Option              | Description                                                |
+| ------------------- | ---------------------------------------------------------- |
+| `endpoint`          | MinIO server endpoint (`host:port`)                        |
+| `access_key`        | MinIO access key                                           |
+| `secret_key`        | MinIO secret key                                           |
+| `secure`            | Use TLS (true/false)                                       |
+| `reddis_address`    | Redis/DragonflyDB connection URL (`redis://host:port/db`)  |
+| `not_found_file`    | Local file to serve for 404s                               |
+| `default_cache_ttl` | Default cache TTL duration (`30s`, `5m`, `1h`, etc.)       |
+| `max_cache_size`    | Maximum cacheable object size (`1MB`, `5MB`, `10MB`, etc.) |
+
+---
+
+### Handler `minio_static_html`
+
+Route-level handler configuration.
+
+| Option        | Description                                                                |
+| ------------- | -------------------------------------------------------------------------- |
+| `bucket`      | The MinIO bucket to serve from (required)                                  |
+| `path_prefix` | Strip this prefix from incoming request paths before lookup                |
+| `html_file`   | The base name of the `.html` file to serve (e.g. `"index"` → `index.html`) |
+| `cache_ttl`   | Override global TTL for this route                                         |
+
+---
+
+## 🔄 JSON Configuration
+
+Example JSON config equivalent to the above:
 
 ```json
 {
   "apps": {
+    "minio.config": {
+      "endpoint": "minio:9000",
+      "access_key": "minioadmin",
+      "secret_key": "minioadmin",
+      "secure": false,
+      "reddis_address": "redis://redis:6379/0",
+      "not_found_file": "/srv/errors/404.html",
+      "default_cache_ttl": "5m",
+      "max_cache_size": "10485760"
+    },
     "http": {
       "servers": {
         "example": {
-          "listen": [":80"],
+          "listen": [":8080"],
           "routes": [
             {
               "handle": [
                 {
                   "handler": "minio_static_html",
-                  "bucket": "my-bucket",
-                  "path_prefix": "/static/",
-                  "cache_ttl": "10m",
-                  "html_file": "index"
+                  "bucket": "mybucket",
+                  "html_file": "index",
+                  "cache_ttl": "2m"
                 }
               ]
             }
           ]
         }
       }
-    },
-    "minio_static_html.config": {
-      "endpoint": "play.min.io:9000",
-      "access_key": "minioadmin",
-      "secret_key": "minioadmin",
-      "secure": true,
-      "dragonfly_address": "redis://localhost:6379",
-      "default_cache_ttl": "5m",
-      "not_found_file": "./404.html"
-    }
-  }
-}
-```
-
-### Caddyfile Configuration
-
-```caddyfile
-{
-  order minio_static_html before file_server
-}
-
-minio_static_html_config play.min.io:9000 {
-  access_key minioadmin
-  secret_key minioadmin
-  secure true
-  dragonfly_address redis://localhost:6379
-  default_cache_ttl 5m
-  not_found_file ./404.html
-}
-
-:80 {
-  route /static/* {
-    minio_static_html {
-      bucket my-bucket
-      path_prefix /static/
-      cache_ttl 10m
-      html_file index
     }
   }
 }
@@ -94,55 +175,50 @@ minio_static_html_config play.min.io:9000 {
 
 ---
 
-## 🧠 How It Works
+## 🧠 Cache Behavior
 
-1. **Intercepts requests** and builds the object key (e.g., `index.html`).
-2. Checks **DragonflyDB/Redis** for a cached version.
-3. If **cache hit**, serves the object from cache.
-4. On **cache miss**, fetches from **MinIO** and stores it in the cache.
-5. Optionally serves a `404.html` file on missing objects.
+* Objects cached in Redis with key format:
 
----
+  ```
+  minio-cache:<bucket>:<objectKey>
+  ```
+* Cache entries include metadata (Content-Type, ETag, Last-Modified, Size).
+* `Cache-Control` headers are set with the TTL.
+* Large objects over `max_cache_size` are **not cached**.
+* Response headers:
 
-## 🛠️ Development
-
-### Requirements
-
-* Go 1.18+
-* Caddy v2
-* MinIO/S3-compatible server
-* Optional: DragonflyDB or Redis
-
-### Building Locally
-
-```bash
-git clone https://github.com/ehzptr/caddy-serve-s3
-cd caddy-serve-s3
-xcaddy build --with github.com/ehzptr/caddy-serve-s3
-```
+  * `X-Cache-Status: HIT` → Served from cache
+  * `X-Cache-Status: MISS` → Fetched from MinIO
 
 ---
 
-## ❗ Notes
+## 🚨 Error Handling
 
-* The `HtmlFile` field determines the file name (without `.html`) that will be requested from the bucket.
-* Cache key format: `minio-cache:{bucket}:{object_key}`
-* If `dragonfly_address` is omitted, caching is disabled.
+* **Missing object (`NoSuchKey`)**
 
----
+  * Serve `not_found_file` if configured
+  * Otherwise return HTTP 404
+* **Other errors**
 
-## 🧪 Example Use Case
-
-Serve a pre-built React/Vue app stored in MinIO, using DragonflyDB to cache `index.html` for 10 minutes, and serve a custom `404.html` if the object is missing.
-
----
-
-## 👤 Author
-
-Maintained by [ehzptr](https://github.com/ehzptr)
+  * Log the error
+  * Respond with HTTP 500
 
 ---
 
-## 📝 License
+## 🛠 Developer Notes
 
-[MIT](./LICENSE)
+* Implements these Caddy module interfaces:
+
+  * `http.handlers.minio_static_html`
+  * `minio.config`
+* Backed by:
+
+  * [minio-go v7](https://github.com/minio/minio-go) (S3 client)
+  * [go-redis v9](https://github.com/redis/go-redis) (cache)
+* Compatible with [DragonflyDB](https://www.dragonflydb.io/) since it speaks the Redis protocol.
+
+---
+
+## 📜 License
+
+MIT

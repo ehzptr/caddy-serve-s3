@@ -43,25 +43,25 @@ type MinioStaticHTML struct {
 
 	HtmlFile string `json:"html_file,omitempty"`
 
-	client          *minio.Client
-	logger          *zap.Logger
-	dragonflyClient *redis.Client
-	cacheTTL        time.Duration
-	GlobalConfig    *MinioConfig
+	client       *minio.Client
+	logger       *zap.Logger
+	redisClient  *redis.Client
+	cacheTTL     time.Duration
+	GlobalConfig *MinioConfig
 }
 
 // MinioConfig stores global settings shared by all handlers.
 type MinioConfig struct {
-	Endpoint         string `json:"endpoint,omitempty"`
-	AccessKey        string `json:"access_key,omitempty"`
-	SecretKey        string `json:"secret_key,omitempty"`
-	Secure           bool   `json:"secure,omitempty"`
-	DragonflyAddress string `json:"dragonfly_address,omitempty"`
-	NotFoundFile     string `json:"not_found_file,omitempty"`
-	DefaultCacheTTL  string `json:"default_cache_ttl,omitempty"`
-	MaxCacheSize     int64  `json:"max_cache_size,omitempty"` // NEW: in bytes
+	Endpoint        string `json:"endpoint,omitempty"`
+	AccessKey       string `json:"access_key,omitempty"`
+	SecretKey       string `json:"secret_key,omitempty"`
+	Secure          bool   `json:"secure,omitempty"`
+	ReddisAddress   string `json:"reddis_address,omitempty"`
+	NotFoundFile    string `json:"not_found_file,omitempty"`
+	DefaultCacheTTL string `json:"default_cache_ttl,omitempty"`
+	MaxCacheSize    int64  `json:"max_cache_size,omitempty"` // NEW: in bytes
 
-	DragonflyClient *redis.Client `json:"-"`
+	redisClient *redis.Client `json:"-"`
 }
 
 // CachedObject defines the structure for storing objects in the cache.
@@ -108,8 +108,8 @@ func (h *MinioStaticHTML) Provision(ctx caddy.Context) error {
 	h.client = client
 
 	// Set up DragonflyDB client and parse TTL if configured
-	if cfg.DragonflyClient != nil {
-		h.dragonflyClient = cfg.DragonflyClient
+	if cfg.redisClient != nil {
+		h.redisClient = cfg.redisClient
 
 		// Use per-route TTL if set, otherwise fall back to global default
 		ttlToParse := h.CacheTTL
@@ -149,9 +149,9 @@ func (h *MinioStaticHTML) ServeHTTP(w http.ResponseWriter, r *http.Request, next
 	objectKey := fmt.Sprintf("%s.html", h.HtmlFile)
 
 	// 1. Try to serve from cache
-	if h.dragonflyClient != nil && h.cacheTTL > 0 {
+	if h.redisClient != nil && h.cacheTTL > 0 {
 		cacheKey := fmt.Sprintf("minio-cache:%s:%s", h.Bucket, objectKey)
-		cachedResult, err := h.dragonflyClient.Get(r.Context(), cacheKey).Result()
+		cachedResult, err := h.redisClient.Get(r.Context(), cacheKey).Result()
 		if err == nil {
 			var cachedObj CachedObject
 			if err := json.Unmarshal([]byte(cachedResult), &cachedObj); err == nil {
@@ -197,7 +197,7 @@ func (h *MinioStaticHTML) ServeHTTP(w http.ResponseWriter, r *http.Request, next
 		maxCacheSize = h.GlobalConfig.MaxCacheSize
 	}
 
-	if h.dragonflyClient != nil && h.cacheTTL > 0 {
+	if h.redisClient != nil && h.cacheTTL > 0 {
 		if objInfo.Size > maxCacheSize {
 			h.logger.Warn("object too large for cache, skipping",
 				zap.String("bucket", h.Bucket),
@@ -216,7 +216,7 @@ func (h *MinioStaticHTML) ServeHTTP(w http.ResponseWriter, r *http.Request, next
 			if jsonData, err := json.Marshal(cachedObj); err != nil {
 				h.logger.Error("failed to marshal object for caching", zap.Error(err))
 			} else {
-				if err := h.dragonflyClient.Set(r.Context(), cacheKey, jsonData, h.cacheTTL).Err(); err != nil {
+				if err := h.redisClient.Set(r.Context(), cacheKey, jsonData, h.cacheTTL).Err(); err != nil {
 					h.logger.Error("failed to SET object in cache", zap.String("key", cacheKey), zap.Error(err))
 				} else {
 					h.logger.Debug("stored object in cache", zap.String("key", cacheKey))
@@ -296,17 +296,17 @@ func (MinioConfigModule) CaddyModule() caddy.ModuleInfo {
 
 // Provision initializes the DragonflyDB/Redis client.
 func (m *MinioConfigModule) Provision(ctx caddy.Context) error {
-	if m.DragonflyAddress != "" {
-		opt, err := redis.ParseURL(m.DragonflyAddress)
+	if m.ReddisAddress != "" {
+		opt, err := redis.ParseURL(m.ReddisAddress)
 		if err != nil {
-			return fmt.Errorf("invalid dragonfly_address URL: %w", err)
+			return fmt.Errorf("invalid reddis_address URL: %w", err)
 		}
 		client := redis.NewClient(opt)
 		if err := client.Ping(context.Background()).Err(); err != nil {
-			return fmt.Errorf("failed to connect to dragonflyDB at %s: %w", m.DragonflyAddress, err)
+			return fmt.Errorf("failed to connect to dragonflyDB at %s: %w", m.ReddisAddress, err)
 		}
-		m.DragonflyClient = client
-		ctx.Logger().Info("connected to dragonflyDB", zap.String("address", m.DragonflyAddress))
+		m.redisClient = client
+		ctx.Logger().Info("connected to dragonflyDB", zap.String("address", m.ReddisAddress))
 	}
 	return nil
 }
@@ -315,8 +315,8 @@ func (m *MinioConfigModule) Start() error { return nil }
 
 // Stop satisfies the caddy.App interface. It currently does nothing.
 func (m *MinioConfigModule) Stop() error {
-	if m.DragonflyClient != nil {
-		return m.DragonflyClient.Close()
+	if m.redisClient != nil {
+		return m.redisClient.Close()
 	}
 
 	return nil
@@ -350,11 +350,11 @@ func (m *MinioConfigModule) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 					return d.ArgErr()
 				}
 				m.Secure = (d.Val() == "true")
-			case "dragonfly_address":
+			case "reddis_address":
 				if !d.NextArg() {
 					return d.ArgErr()
 				}
-				m.DragonflyAddress = d.Val()
+				m.ReddisAddress = d.Val()
 			case "not_found_file":
 				if !d.NextArg() {
 					return d.ArgErr()
