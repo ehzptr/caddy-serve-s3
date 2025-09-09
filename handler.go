@@ -45,7 +45,20 @@ type MinioStaticHTML struct {
 	logger          *zap.Logger
 	dragonflyClient *redis.Client
 	cacheTTL        time.Duration
-	globalConfig    *MinioConfigModule
+	GlobalConfig    *MinioConfig
+}
+
+// MinioConfig stores global settings shared by all handlers.
+type MinioConfig struct {
+	Endpoint         string `json:"endpoint,omitempty"`
+	AccessKey        string `json:"access_key,omitempty"`
+	SecretKey        string `json:"secret_key,omitempty"`
+	Secure           bool   `json:"secure,omitempty"`
+	DragonflyAddress string `json:"dragonfly_address,omitempty"`
+	NotFoundFile     string `json:"not_found_file,omitempty"`
+	DefaultCacheTTL  string `json:"default_cache_ttl,omitempty"`
+
+	DragonflyClient *redis.Client `json:"-"`
 }
 
 // CachedObject defines the structure for storing objects in the cache.
@@ -75,7 +88,7 @@ func (h *MinioStaticHTML) Provision(ctx caddy.Context) error {
 		return fmt.Errorf("the 'minio_static_html.config' app is not loaded; please configure it globally")
 	}
 	cfg := val.(*MinioConfigModule)
-	h.globalConfig = cfg // Store a reference to the global config
+	h.GlobalConfig = cfg.MinioConfig // Store a reference to the global config
 
 	if h.Bucket == "" {
 		return fmt.Errorf("bucket must be specified")
@@ -238,8 +251,8 @@ func (h *MinioStaticHTML) handleMinioError(w http.ResponseWriter, r *http.Reques
 	}
 	if minioErr.Code == "NoSuchKey" {
 		h.logger.Debug("object not found in bucket", zap.Error(err))
-		if h.globalConfig.NotFoundFile != "" {
-			http.ServeFile(w, r, h.globalConfig.NotFoundFile)
+		if h.GlobalConfig.NotFoundFile != "" {
+			http.ServeFile(w, r, h.GlobalConfig.NotFoundFile)
 		} else {
 			http.NotFound(w, r)
 		}
@@ -253,17 +266,9 @@ func (h *MinioStaticHTML) handleMinioError(w http.ResponseWriter, r *http.Reques
 	http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 }
 
-// MinioConfigModule is the global app configuration for MinIO and DragonflyDB.
+// MinioConfigModule is the global app configuration for MinIO.
 type MinioConfigModule struct {
-	Endpoint         string `json:"endpoint,omitempty"`
-	AccessKey        string `json:"access_key,omitempty"`
-	SecretKey        string `json:"secret_key,omitempty"`
-	Secure           bool   `json:"secure,omitempty"`
-	DragonflyAddress string `json:"dragonfly_address,omitempty"`
-	NotFoundFile     string `json:"not_found_file,omitempty"`
-	DefaultCacheTTL  string `json:"default_cache_ttl,omitempty"`
-
-	DragonflyClient *redis.Client `json:"-"`
+	*MinioConfig
 }
 
 func (MinioConfigModule) CaddyModule() caddy.ModuleInfo {
