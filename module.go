@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -58,6 +59,7 @@ type MinioConfig struct {
 	DragonflyAddress string `json:"dragonfly_address,omitempty"`
 	NotFoundFile     string `json:"not_found_file,omitempty"`
 	DefaultCacheTTL  string `json:"default_cache_ttl,omitempty"`
+	MaxCacheSize     int64  `json:"max_cache_size,omitempty"` // NEW: in bytes
 
 	DragonflyClient *redis.Client `json:"-"`
 }
@@ -146,12 +148,6 @@ func (h *MinioStaticHTML) ServeHTTP(w http.ResponseWriter, r *http.Request, next
 
 	objectKey := fmt.Sprintf("%s.html", h.HtmlFile)
 
-	// objectKey := strings.TrimPrefix(r.URL.Path, h.PathPrefix)
-	// objectKey = strings.TrimPrefix(objectKey, "/")
-	// if strings.HasSuffix(objectKey, "/") || objectKey == "" {
-	// 	objectKey += "index.html"
-	// }
-
 	// 1. Try to serve from cache
 	if h.dragonflyClient != nil && h.cacheTTL > 0 {
 		cacheKey := fmt.Sprintf("minio-cache:%s:%s", h.Bucket, objectKey)
@@ -196,24 +192,35 @@ func (h *MinioStaticHTML) ServeHTTP(w http.ResponseWriter, r *http.Request, next
 	}
 
 	// 3. Store in cache
+	maxCacheSize := int64(5 * 1024 * 1024) // default 5 MB
+	if h.GlobalConfig.MaxCacheSize > 0 {
+		maxCacheSize = h.GlobalConfig.MaxCacheSize
+	}
+
 	if h.dragonflyClient != nil && h.cacheTTL > 0 {
-		cacheKey := fmt.Sprintf("minio-cache:%s:%s", h.Bucket, objectKey)
-		cachedObj := CachedObject{
-			ContentType:  objInfo.ContentType,
-			ETag:         objInfo.ETag,
-			LastModified: objInfo.LastModified,
-			Size:         objInfo.Size,
-			Content:      content,
-		}
-		jsonData, err := json.Marshal(cachedObj)
-		if err != nil {
-			h.logger.Error("failed to marshal object for caching", zap.Error(err))
+		if objInfo.Size > maxCacheSize {
+			h.logger.Warn("object too large for cache, skipping",
+				zap.String("bucket", h.Bucket),
+				zap.String("key", objectKey),
+				zap.Int64("size_bytes", objInfo.Size),
+			)
 		} else {
-			err := h.dragonflyClient.Set(r.Context(), cacheKey, jsonData, h.cacheTTL).Err()
-			if err != nil {
-				h.logger.Error("failed to SET object in cache", zap.String("key", cacheKey), zap.Error(err))
+			cacheKey := fmt.Sprintf("minio-cache:%s:%s", h.Bucket, objectKey)
+			cachedObj := CachedObject{
+				ContentType:  objInfo.ContentType,
+				ETag:         objInfo.ETag,
+				LastModified: objInfo.LastModified,
+				Size:         objInfo.Size,
+				Content:      content,
+			}
+			if jsonData, err := json.Marshal(cachedObj); err != nil {
+				h.logger.Error("failed to marshal object for caching", zap.Error(err))
 			} else {
-				h.logger.Debug("stored object in cache", zap.String("key", cacheKey))
+				if err := h.dragonflyClient.Set(r.Context(), cacheKey, jsonData, h.cacheTTL).Err(); err != nil {
+					h.logger.Error("failed to SET object in cache", zap.String("key", cacheKey), zap.Error(err))
+				} else {
+					h.logger.Debug("stored object in cache", zap.String("key", cacheKey))
+				}
 			}
 		}
 	}
@@ -225,6 +232,10 @@ func (h *MinioStaticHTML) ServeHTTP(w http.ResponseWriter, r *http.Request, next
 
 // serveFromCache writes a cached object to the HTTP response.
 func (h *MinioStaticHTML) serveFromCache(w http.ResponseWriter, r *http.Request, obj *CachedObject) {
+	if h.cacheTTL > 0 {
+		w.Header().Set("Cache-Control",
+			fmt.Sprintf("public, max-age=%d", int(h.cacheTTL.Seconds())))
+	}
 	w.Header().Set("Content-Type", obj.ContentType)
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", obj.Size))
 	w.Header().Set("ETag", obj.ETag)
@@ -235,6 +246,10 @@ func (h *MinioStaticHTML) serveFromCache(w http.ResponseWriter, r *http.Request,
 
 // serveFromOrigin writes an object just fetched from MinIO to the response.
 func (h *MinioStaticHTML) serveFromOrigin(w http.ResponseWriter, r *http.Request, objInfo *minio.ObjectInfo, content []byte) {
+	if h.cacheTTL > 0 {
+		w.Header().Set("Cache-Control",
+			fmt.Sprintf("public, max-age=%d", int(h.cacheTTL.Seconds())))
+	}
 	w.Header().Set("Content-Type", objInfo.ContentType)
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", objInfo.Size))
 	w.Header().Set("ETag", objInfo.ETag)
@@ -307,14 +322,6 @@ func (m *MinioConfigModule) Stop() error {
 	return nil
 }
 
-// Cleanup closes the DragonflyDB/Redis client connection.
-// func (m *MinioConfigModule) Cleanup() error {
-// 	if m.DragonflyClient != nil {
-// 		return m.DragonflyClient.Close()
-// 	}
-// 	return nil
-// }
-
 func (m *MinioConfigModule) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	for d.Next() {
 		if !d.NextArg() {
@@ -358,6 +365,16 @@ func (m *MinioConfigModule) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 					return d.ArgErr()
 				}
 				m.DefaultCacheTTL = d.Val()
+			case "max_cache_size":
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				sizeStr := d.Val()
+				sizeBytes, err := parseSize(sizeStr)
+				if err != nil {
+					return d.Errf("invalid max_cache_size: %v", err)
+				}
+				m.MaxCacheSize = sizeBytes
 			default:
 				return d.Errf("unrecognized subdirective '%s'", d.Val())
 			}
@@ -369,10 +386,29 @@ func (m *MinioConfigModule) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	return nil
 }
 
+func parseSize(s string) (int64, error) {
+	var multiplier int64 = 1
+	switch {
+	case strings.HasSuffix(s, "KB"):
+		multiplier = 1024
+		s = strings.TrimSuffix(s, "KB")
+	case strings.HasSuffix(s, "MB"):
+		multiplier = 1024 * 1024
+		s = strings.TrimSuffix(s, "MB")
+	case strings.HasSuffix(s, "GB"):
+		multiplier = 1024 * 1024 * 1024
+		s = strings.TrimSuffix(s, "GB")
+	}
+	val, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	return val * multiplier, nil
+}
+
 var (
 	_ caddy.Provisioner           = (*MinioConfigModule)(nil)
 	_ caddy.App                   = (*MinioConfigModule)(nil)
 	_ caddyhttp.MiddlewareHandler = (*MinioStaticHTML)(nil)
 	_ caddyfile.Unmarshaler       = (*MinioConfigModule)(nil)
-	// _ caddy.CleanerUpper          = (*MinioConfigModule)(nil)
 )
