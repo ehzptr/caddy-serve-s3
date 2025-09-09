@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/caddyserver/caddy/v2"
+	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -83,9 +84,9 @@ func (h *MinioStaticHTML) Provision(ctx caddy.Context) error {
 	h.logger = ctx.Logger()
 
 	// Load the shared global MinIO & DragonflyDB configuration
-	val, err := ctx.App("minio_static_html.config")
+	val, err := ctx.App("minio.config")
 	if err != nil {
-		return fmt.Errorf("the 'minio_static_html.config' app is not loaded; please configure it globally")
+		return fmt.Errorf("the 'minio.config' app is not loaded; please configure it globally")
 	}
 	cfg := val.(*MinioConfigModule)
 	h.GlobalConfig = cfg.MinioConfig // Store a reference to the global config
@@ -273,7 +274,7 @@ type MinioConfigModule struct {
 
 func (MinioConfigModule) CaddyModule() caddy.ModuleInfo {
 	return caddy.ModuleInfo{
-		ID:  "minio_static_html.config",
+		ID:  "minio.config",
 		New: func() caddy.Module { return new(MinioConfigModule) },
 	}
 }
@@ -308,64 +309,64 @@ func (m *MinioConfigModule) Cleanup() error {
 	return nil
 }
 
-// func (m *MinioConfigModule) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
-// 	for d.Next() {
-// 		if !d.NextArg() {
-// 			return d.ArgErr()
-// 		}
-// 		val := d.Val()
-// 		for d.NextBlock(0) {
-// 			switch d.Val() {
-// 			case "endpoint":
-// 				if !d.NextArg() {
-// 					return d.ArgErr()
-// 				}
-// 				m.Endpoint = d.Val()
-// 			case "access_key":
-// 				if !d.NextArg() {
-// 					return d.ArgErr()
-// 				}
-// 				m.AccessKey = d.Val()
-// 			case "secret_key":
-// 				if !d.NextArg() {
-// 					return d.ArgErr()
-// 				}
-// 				m.SecretKey = d.Val()
-// 			case "secure":
-// 				if !d.NextArg() {
-// 					return d.ArgErr()
-// 				}
-// 				m.Secure = (d.Val() == "true")
-// 			case "dragonfly_address":
-// 				if !d.NextArg() {
-// 					return d.ArgErr()
-// 				}
-// 				m.DragonflyAddress = d.Val()
-// 			case "not_found_file":
-// 				if !d.NextArg() {
-// 					return d.ArgErr()
-// 				}
-// 				m.NotFoundFile = d.Val()
-// 			case "default_cache_ttl":
-// 				if !d.NextArg() {
-// 					return d.ArgErr()
-// 				}
-// 				m.DefaultCacheTTL = d.Val()
-// 			default:
-// 				return d.Errf("unrecognized subdirective '%s'", d.Val())
-// 			}
-// 		}
-// 		if m.Endpoint == "" {
-// 			m.Endpoint = val
-// 		}
-// 	}
-// 	return nil
-// }
+func (m *MinioConfigModule) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
+	for d.Next() {
+		if !d.NextArg() {
+			return d.ArgErr()
+		}
+		val := d.Val()
+		for d.NextBlock(0) {
+			switch d.Val() {
+			case "endpoint":
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				m.Endpoint = d.Val()
+			case "access_key":
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				m.AccessKey = d.Val()
+			case "secret_key":
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				m.SecretKey = d.Val()
+			case "secure":
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				m.Secure = (d.Val() == "true")
+			case "dragonfly_address":
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				m.DragonflyAddress = d.Val()
+			case "not_found_file":
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				m.NotFoundFile = d.Val()
+			case "default_cache_ttl":
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				m.DefaultCacheTTL = d.Val()
+			default:
+				return d.Errf("unrecognized subdirective '%s'", d.Val())
+			}
+		}
+		if m.Endpoint == "" {
+			m.Endpoint = val
+		}
+	}
+	return nil
+}
 
 var (
-	_ caddyhttp.MiddlewareHandler = (*MinioStaticHTML)(nil)
+	_ caddy.Provisioner           = (*MinioConfigModule)(nil)
 	_ caddy.App                   = (*MinioConfigModule)(nil)
-	// _ caddyfile.Unmarshaler       = (*MinioConfigModule)(nil)
-	_ caddy.Provisioner  = (*MinioConfigModule)(nil)
-	_ caddy.CleanerUpper = (*MinioConfigModule)(nil)
+	_ caddyhttp.MiddlewareHandler = (*MinioStaticHTML)(nil)
+	_ caddyfile.Unmarshaler       = (*MinioConfigModule)(nil)
+	_ caddy.CleanerUpper          = (*MinioConfigModule)(nil)
 )
