@@ -315,9 +315,9 @@ func (m *MinioConfigModule) Start() error { return nil }
 
 // Stop satisfies the caddy.App interface. It currently does nothing.
 func (m *MinioConfigModule) Stop() error {
-	if m.redisClient != nil {
-		return m.redisClient.Close()
-	}
+	// if m.redisClient != nil {
+	// 	return m.redisClient.Close()
+	// }
 
 	return nil
 }
